@@ -909,13 +909,18 @@ function ChangesPage({ quoteId, token }) {
   useEffect(() => {
     async function load() {
       try {
+        console.log("ChangesPage: quoteId=", quoteId, "token=", token);
+        console.log("SB_URL=", SB_URL, "SB_KEY=", SB_KEY?.slice(0,20));
         const data = await sb("GET", `/quotes?id=eq.${quoteId}&select=*`);
-        if (!data?.[0]) { setStatus("invalid"); return; }
-        // Verify token if present in the quote
+        console.log("ChangesPage: data=", data);
+        if (!data || data.length === 0) { setStatus("invalid"); return; }
         if (data[0].accept_token && data[0].accept_token !== token) { setStatus("invalid"); return; }
         setQuote(data[0]);
         setStatus("ready");
-      } catch(e) { setStatus("error"); }
+      } catch(e) {
+        console.error("ChangesPage error:", e.message);
+        setStatus("error");
+      }
     }
     if (quoteId && token) load();
     else setStatus("invalid");
@@ -987,7 +992,9 @@ function ChangesPage({ quoteId, token }) {
         </>}
 
         {(status==="invalid"||status==="error") && (
-          <p style={{textAlign:"center",color:"#c8392b"}}>This link is invalid or has expired. Please contact us at sales@truenorthscreenprinting.ca</p>
+          <p style={{textAlign:"center",color:"#c8392b"}}>
+            {status==="error" ? "Could not load quote. Please try again or contact sales@truenorthscreenprinting.ca" : "This link is invalid or has expired. Please contact us at sales@truenorthscreenprinting.ca"}
+          </p>
         )}
       </div>
     </div>
