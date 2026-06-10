@@ -15,102 +15,99 @@ const sb = async (method, path, body) => {
   return text ? JSON.parse(text) : [];
 };
 
-// ── Pricing Logic ─────────────────────────────────────────────────────────────
-const LABOR_RATE_SP = 48.80;   // $40/hr × 2 people × 1.22 burden
-const LABOR_RATE_EMB = 56.12;  // $46/hr × 1.22 burden
-const BURN_TIME = 10/60;       // hours
-const SETUP_TIME = 10/60;
-const TEARDOWN_TIME = 10/60;
-const PRINT_TIME_PER_UNIT = 24/3600; // 24 seconds
-const HOOP_TIME_HAT = 20/60;
-const STITCH_SPEED = 800; // stitches/min
-const DIGITIZING_FEE = 50;
-const SLEEVE_SURCHARGE_SP = 3;
-const NECK_LABEL_SURCHARGE = 2;
+// ── Screen Print Price Table ───────────────────────────────────────────────────
+// Per unit per location, by colour count and quantity tier
+// Tiers: 50-100, 101-200, 201-499, 500+
+// Under 50: use 50-100 rate with markup (25-49: ×1.25, <25: ×1.40)
+const SP_TABLE = {
+//  colours: [50-100,  101-200,  201-499,  500+]
+    1:  [9.89,  8.44,  8.37,  6.90],
+    2:  [10.89, 9.29,  7.45,  5.58],
+    3:  [11.89, 10.14, 8.13,  6.09],
+    4:  [12.89, 10.99, 8.81,  6.60],
+    5:  [13.89, 11.84, 9.49,  7.11],
+    6:  [14.89, 12.69, 10.17, 7.62],
+    7:  [15.89, 13.54, 10.85, 8.13],
+    8:  [16.89, 14.39, 11.53, 8.64],
+    9:  [17.89, 15.24, 12.21, 9.15],
+    10: [18.89, 16.09, 12.89, 9.66],
+};
+const SP_EXTRA_PER_COLOUR = 1.00; // per additional colour above 10
+const SP_SETUP_FEE = 25.00;       // per colour, one-time per order
+const SP_SLEEVE_SURCHARGE = 3.00; // per unit for sleeve/hard print locations
+const SP_ART_FEE = 75.00;         // per hour (applied manually)
+const SP_INK_CHANGE_FEE = 25.00;  // per colour (applied manually)
+const SP_PANTONE_FEE = 25.00;     // per colour (applied manually)
+
+// DTF / Vinyl constants (kept for later)
 const DTF_SHEET_COST = 70;
 const DTF_SHEET_W = 22;
 const DTF_SHEET_H = 60;
 const VINYL_COST_PER_SQFT = 2.64;
-const MARKUP = { budget: 1.60, mid: 1.75, premium: 1.95 };
 
-function calcScreenPrint({ qty, placements, tier = "mid", isRush = false }) {
-  let totalLabor = 0;
+function getSPRatePerUnit(colours, qty) {
+  const c = Math.min(Math.max(parseInt(colours) || 1, 1), 999);
+  
+  // Get the base rate from the 50-100 tier
+  const baseRate = c <= 10
+    ? SP_TABLE[c][0]
+    : SP_TABLE[10][0] + (c - 10) * SP_EXTRA_PER_COLOUR;
+
+  // Apply quantity tier
+  let rate;
+  if (qty >= 500) {
+    rate = c <= 10 ? SP_TABLE[c][3] : SP_TABLE[10][3] + (c - 10) * SP_EXTRA_PER_COLOUR;
+  } else if (qty >= 201) {
+    rate = c <= 10 ? SP_TABLE[c][2] : SP_TABLE[10][2] + (c - 10) * SP_EXTRA_PER_COLOUR;
+  } else if (qty >= 101) {
+    rate = c <= 10 ? SP_TABLE[c][1] : SP_TABLE[10][1] + (c - 10) * SP_EXTRA_PER_COLOUR;
+  } else if (qty >= 50) {
+    rate = baseRate;
+  } else if (qty >= 25) {
+    rate = baseRate * 1.25; // 25-49 units: +25%
+  } else {
+    rate = baseRate * 1.40; // under 25 units: +40%
+  }
+  
+  return rate;
+}
+
+function calcScreenPrint({ qty, placements, isRush = false }) {
+  let decorationCost = 0;
   let screenSetupFee = 0;
-  let perUnitAdd = 0;
 
   placements.forEach(p => {
     const colours = parseInt(p.colours) || 1;
-    const isSleeve = (p.placement || "").toLowerCase().includes("sleeve");
-    const isNeck = (p.placement || "").toLowerCase().includes("neck");
-    
-    // Screen setup (one-time)
-    const setupHours = colours * (BURN_TIME + SETUP_TIME + TEARDOWN_TIME);
-    screenSetupFee += setupHours * LABOR_RATE_SP;
-    
-    // Per-unit print labor
-    const printHoursPerUnit = colours * PRINT_TIME_PER_UNIT;
-    totalLabor += printHoursPerUnit * qty * LABOR_RATE_SP;
-    
-    // Surcharges per unit
-    if (isSleeve) perUnitAdd += SLEEVE_SURCHARGE_SP;
-    if (isNeck) perUnitAdd += NECK_LABEL_SURCHARGE;
+    const isSleeve = (p.placement || "").toLowerCase().includes("sleeve")
+      || (p.placement || "").toLowerCase().includes("hard print");
+
+    // Per-unit decoration cost for this placement
+    const ratePerUnit = getSPRatePerUnit(colours, qty);
+    const sleeveSurcharge = isSleeve ? SP_SLEEVE_SURCHARGE : 0;
+    decorationCost += (ratePerUnit + sleeveSurcharge) * qty;
+
+    // One-time setup fee per colour for this placement
+    screenSetupFee += colours * SP_SETUP_FEE;
   });
 
-  const minLabor = qty < 50 ? Math.max(40 - totalLabor, 0) : 0;
-  const decorationCost = totalLabor + minLabor + (perUnitAdd * qty);
-  const rushFee = isRush ? decorationCost * 0.25 : 0;
-  
+  const rushFee = isRush ? (decorationCost + screenSetupFee) * 0.25 : 0;
   return { decorationCost, screenSetupFee, rushFee };
-}
-
-function calcEmbroidery({ qty, placements, garmentType = "tee", stitches = 7500, isRush = false }) {
-  let totalCost = 0;
-  const isHat = garmentType.toLowerCase().includes("hat") || garmentType.toLowerCase().includes("cap");
-  const hoopTime = isHat ? HOOP_TIME_HAT : garmentType.toLowerCase().includes("crew") ? 15/60 : 10/60;
-  
-  placements.forEach(p => {
-    const isSide = (p.placement || "").toLowerCase().includes("side");
-    const isBack = (p.placement || "").toLowerCase().includes("back");
-    const sitchCount = p.stitches || stitches;
-    
-    const stitchTime = sitchCount / STITCH_SPEED / 60; // hours
-    const hoopLaborPerUnit = hoopTime * LABOR_RATE_EMB;
-    const stitchLaborPerUnit = stitchTime * LABOR_RATE_EMB;
-    let surcharge = 0;
-    if (isSide) surcharge = 3;
-    if (isBack && isHat) surcharge = 5;
-    
-    totalCost += (hoopLaborPerUnit + stitchLaborPerUnit + surcharge) * qty;
-  });
-  
-  // Digitizing (split across qty, max $50)
-  const digitizingPerUnit = Math.min(DIGITIZING_FEE / qty, 50);
-  totalCost += digitizingPerUnit * qty;
-  
-  const rushFee = isRush ? totalCost * 0.25 : 0;
-  return { decorationCost: totalCost, screenSetupFee: 0, rushFee };
 }
 
 function calcDTF({ qty, placements, isRush = false }) {
   let totalCost = 0;
-  const LABOUR_PER_PLACEMENT = (5/60) * 40; // 5 min @ $40/hr
-  
+  const LABOUR_PER_PLACEMENT = (5/60) * 40;
   placements.forEach(p => {
     const sizeKey = (p.dtf_size || "standard").toLowerCase();
     let imgW = 8, imgH = 8;
-    if (sizeKey.includes("small") || sizeKey.includes("up to 4")) { imgW = 4; imgH = 4; }
-    else if (sizeKey.includes("oversized") || sizeKey.includes("8+")) { imgW = 14; imgH = 14; }
-    
-    // How many images fit on a 22×60 sheet
+    if (sizeKey.includes("small")) { imgW = 4; imgH = 4; }
+    else if (sizeKey.includes("oversized")) { imgW = 14; imgH = 14; }
     const perRow = Math.floor(DTF_SHEET_W / imgW);
     const perCol = Math.floor(DTF_SHEET_H / imgH);
     const imgsPerSheet = perRow * perCol;
     const sheetsNeeded = Math.ceil(qty / imgsPerSheet);
-    const sheetCostTotal = sheetsNeeded * DTF_SHEET_COST * 1.75;
-    const labourTotal = LABOUR_PER_PLACEMENT * qty;
-    totalCost += sheetCostTotal + labourTotal;
+    totalCost += (sheetsNeeded * DTF_SHEET_COST * 1.75) + (LABOUR_PER_PLACEMENT * qty);
   });
-  
   const rushFee = isRush ? totalCost * 0.25 : 0;
   return { decorationCost: totalCost, screenSetupFee: 0, rushFee };
 }
@@ -118,16 +115,12 @@ function calcDTF({ qty, placements, isRush = false }) {
 function calcVinyl({ qty, placements, isRush = false }) {
   let totalCost = 0;
   const LABOUR_PER_PLACEMENT = (5/60) * 40;
-  
   placements.forEach(p => {
     const w = parseFloat(p.width_in) || 4;
     const h = parseFloat(p.height_in) || 4;
     const sqft = (w * h) / 144;
-    const materialCost = sqft * VINYL_COST_PER_SQFT * 1.75;
-    const labourCost = LABOUR_PER_PLACEMENT;
-    totalCost += (materialCost + labourCost) * qty;
+    totalCost += (sqft * VINYL_COST_PER_SQFT * 1.75 + LABOUR_PER_PLACEMENT) * qty;
   });
-  
   const rushFee = isRush ? totalCost * 0.25 : 0;
   return { decorationCost: totalCost, screenSetupFee: 0, rushFee };
 }
@@ -428,12 +421,12 @@ function QuoteBuilder({ submission, existingQuote, onSaved, onSent, toast }) {
 
   let decorCost = 0, setupFee = 0, rushFee = 0;
   if (isSP && qty > 0) {
-    const r = calcScreenPrint({ qty, placements:spPlacements, tier, isRush });
+    const r = calcScreenPrint({ qty, placements:spPlacements, isRush });
     decorCost += r.decorationCost; setupFee += r.screenSetupFee; rushFee += r.rushFee;
   }
   if (isEMB && qty > 0) {
-    const r = calcEmbroidery({ qty, placements:embPlacements, garmentType:garmentStyle, isRush });
-    decorCost += r.decorationCost; rushFee += r.rushFee;
+    // EMB placeholder — coming soon
+    decorCost += 0;
   }
   if (isDTF && qty > 0) {
     const r = calcDTF({ qty, placements:dtfPlacements, isRush });
@@ -604,12 +597,16 @@ function QuoteBuilder({ submission, existingQuote, onSaved, onSent, toast }) {
               <div style={S.g2}>
                 <div><label style={S.lbl}>Quantity</label><input style={S.inp} type="number" value={qty} onChange={e=>setQty(parseInt(e.target.value)||0)} placeholder="0"/></div>
                 <div>
-                  <label style={S.lbl}>Pricing Tier</label>
-                  <select style={S.sel} value={tier} onChange={e=>setTier(e.target.value)}>
-                    <option value="budget">Budget (60% markup)</option>
-                    <option value="mid">Mid-Range (75% markup)</option>
-                    <option value="premium">Premium (95% markup)</option>
-                  </select>
+                  <label style={S.lbl}>Quantity Tier</label>
+                  <div style={{...S.inp,color:"#e8c547",cursor:"default"}}>
+                    {qty === 0 ? "Enter quantity" :
+                     qty < 25 ? `< 25 units (+40% on 50-100 rate)` :
+                     qty < 50 ? `25–49 units (+25% on 50-100 rate)` :
+                     qty <= 100 ? `50–100 units (base rate)` :
+                     qty <= 200 ? `101–200 units` :
+                     qty <= 499 ? `201–499 units` :
+                     `500+ units`}
+                  </div>
                 </div>
               </div>
               <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:8}}>
@@ -695,24 +692,42 @@ function QuoteBuilder({ submission, existingQuote, onSaved, onSent, toast }) {
               </div>
               <div style={S.cardBody}>
                 {spPlacements.map((p,i)=>(
-                  <div key={p.id} style={{display:"grid",gridTemplateColumns:"1fr 80px 32px",gap:8,marginBottom:10,alignItems:"end"}}>
-                    <div>
-                      {i===0 && <label style={S.lbl}>Placement</label>}
-                      <select style={S.sel} value={p.placement} onChange={e=>setSpPlacements(prev=>prev.map(x=>x.id===p.id?{...x,placement:e.target.value}:x))}>
-                        {["Left Chest","Right Chest","Centre Front","Full Front","Full Back","Centre Back","Left Sleeve","Right Sleeve","Back Neck / Nape","Other / Custom"].map(o=><option key={o} value={o}>{o}</option>)}
-                      </select>
+                  <div key={p.id} style={{background:"#1a1a1a",border:"1px solid #ffffff08",borderRadius:4,padding:"12px",marginBottom:10}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 80px 32px",gap:8,marginBottom:8,alignItems:"end"}}>
+                      <div>
+                        {i===0 && <label style={S.lbl}>Placement</label>}
+                        <select style={S.sel} value={p.placement} onChange={e=>setSpPlacements(prev=>prev.map(x=>x.id===p.id?{...x,placement:e.target.value}:x))}>
+                          {["Left Chest","Right Chest","Centre Front","Full Front","Full Back","Centre Back","Left Sleeve","Right Sleeve","Back Neck / Nape","Other / Custom"].map(o=><option key={o} value={o}>{o}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        {i===0 && <label style={S.lbl}>Colours</label>}
+                        <input style={S.inp} type="number" min="1" max="12" value={p.colours} onChange={e=>setSpPlacements(prev=>prev.map(x=>x.id===p.id?{...x,colours:e.target.value}:x))} placeholder="1"/>
+                      </div>
+                      <button style={{...S.btn("o"),padding:"6px",fontSize:"14px",marginTop:i===0?20:0}} onClick={()=>setSpPlacements(prev=>prev.filter(x=>x.id!==p.id))}>✕</button>
                     </div>
-                    <div>
-                      {i===0 && <label style={S.lbl}>Colours</label>}
-                      <input style={S.inp} type="number" min="1" max="12" value={p.colours} onChange={e=>setSpPlacements(prev=>prev.map(x=>x.id===p.id?{...x,colours:e.target.value}:x))} placeholder="1"/>
-                    </div>
-                    <button style={{...S.btn("o"),padding:"6px",fontSize:"14px",marginTop:i===0?20:0}} onClick={()=>setSpPlacements(prev=>prev.filter(x=>x.id!==p.id))}>✕</button>
+                    {qty > 0 && (
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#555",letterSpacing:"1px"}}>
+                        <span>
+                          ${getSPRatePerUnit(p.colours, qty).toFixed(2)}/unit
+                          {(p.placement||"").toLowerCase().includes("sleeve") ? " + $3.00 sleeve" : ""}
+                          {" × "}{qty} units
+                        </span>
+                        <span style={{color:"#e8c547"}}>
+                          = ${((getSPRatePerUnit(p.colours, qty) + ((p.placement||"").toLowerCase().includes("sleeve") ? 3 : 0)) * qty).toFixed(2)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 ))}
                 <div style={S.divider}/>
-                <div style={{fontSize:"11px",color:"#555",letterSpacing:"1px"}}>
-                  Labor: ${(calcScreenPrint({qty,placements:spPlacements,tier,isRush}).decorationCost).toFixed(2)} · Setup: ${(calcScreenPrint({qty,placements:spPlacements,tier,isRush}).screenSetupFee).toFixed(2)}
-                </div>
+                {qty > 0 && (
+                  <div style={{fontSize:"11px",color:"#555",letterSpacing:"1px",lineHeight:1.8}}>
+                    <div>Decoration: ${calcScreenPrint({qty,placements:spPlacements,isRush:false}).decorationCost.toFixed(2)}</div>
+                    <div>Setup fees: ${calcScreenPrint({qty,placements:spPlacements,isRush:false}).screenSetupFee.toFixed(2)} ({spPlacements.reduce((a,p)=>a+(parseInt(p.colours)||1),0)} colours × $25)</div>
+                    {isRush && <div style={{color:"#ff9f43"}}>Rush fee: ${calcScreenPrint({qty,placements:spPlacements,isRush:true}).rushFee.toFixed(2)}</div>}
+                  </div>
+                )}
               </div>
             </div>
           )}
