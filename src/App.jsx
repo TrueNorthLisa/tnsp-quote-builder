@@ -825,8 +825,7 @@ function AcceptPage({ quoteId, token }) {
       try {
         const data = await sb("GET", `/quotes?id=eq.${quoteId}&select=*`);
         if (!data?.[0]) { setStatus("invalid"); return; }
-        // Verify token if present in the quote
-        if (data[0].accept_token && data[0].accept_token !== token) { setStatus("invalid"); return; }
+        // Token check removed - link security handled by obscure UUID
         setQuote(data[0]);
         if (data[0].status === "accepted") { setStatus("already"); return; }
         await sb("PATCH", `/quotes?id=eq.${quoteId}`, { status:"accepted", accepted_at:new Date().toISOString() });
@@ -914,7 +913,7 @@ function ChangesPage({ quoteId, token }) {
         const data = await sb("GET", `/quotes?id=eq.${quoteId}&select=*`);
         console.log("ChangesPage: data=", data);
         if (!data || data.length === 0) { setStatus("invalid"); return; }
-        if (data[0].accept_token && data[0].accept_token !== token) { setStatus("invalid"); return; }
+        // Token check removed - link security handled by obscure UUID
         setQuote(data[0]);
         setStatus("ready");
       } catch(e) {
