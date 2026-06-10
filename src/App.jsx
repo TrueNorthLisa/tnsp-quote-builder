@@ -95,6 +95,15 @@ const S = {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
+  // Handle /accept and /changes routes from quote email links
+  const path = window.location.pathname;
+  const params = new URLSearchParams(window.location.search);
+  const quoteId = params.get("id");
+  const token = params.get("token");
+
+  if (path === "/accept") return <AcceptPage quoteId={quoteId} token={token}/>;
+  if (path === "/changes") return <ChangesPage quoteId={quoteId} token={token}/>;
+
   const [view, setView] = useState("submissions");
   const [submissions, setSubmissions] = useState([]);
   const [quotes, setQuotes] = useState([]);
@@ -447,25 +456,26 @@ function QuoteBuilder({ submission, existingQuote, onSaved, onSent, toast }) {
         saved = r;
         setSavedQuoteId(r.id);
       }
-      // Mark submission as quoted
       if (sub.id) await sb("PATCH", `/order_submissions?id=eq.${sub.id}`, { status:"quoted" });
       onSaved(saved);
-    } catch(e) { toast("Save failed: "+e.message, "e"); }
+      return saved.id; // return ID directly so sendQuote can use it immediately
+    } catch(e) { toast("Save failed: "+e.message, "e"); return null; }
   };
 
   const sendQuote = async () => {
     if (!custEmail) { toast("Customer email required", "e"); return; }
     setSending(true);
     try {
-      await saveQuote();
+      const quoteId = await saveQuote(); // get ID directly from return value
+      if (!quoteId) { toast("Could not save quote before sending", "e"); setSending(false); return; }
       const quoteData = buildQuotePayload();
-      quoteData.id = savedQuoteId;
+      quoteData.id = quoteId;
       const res = await fetch("/api/send-quote", {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ quote:quoteData, submission:{ customer_name:custName, customer_email:custEmail } }),
       });
       if (!res.ok) throw new Error("Send failed");
-      await sb("PATCH", `/quotes?id=eq.${savedQuoteId}`, { status:"sent", sent_at:new Date().toISOString() });
+      await sb("PATCH", `/quotes?id=eq.${quoteId}`, { status:"sent", sent_at:new Date().toISOString() });
       onSent();
     } catch(e) { toast("Send failed: "+e.message, "e"); }
     setSending(false);
@@ -800,6 +810,181 @@ function QuoteBuilder({ submission, existingQuote, onSaved, onSent, toast }) {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Accept Page ───────────────────────────────────────────────────────────────
+function AcceptPage({ quoteId, token }) {
+  const [status, setStatus] = useState("loading");
+  const [quote, setQuote] = useState(null);
+
+  useEffect(() => {
+    async function accept() {
+      try {
+        const data = await sb("GET", `/quotes?id=eq.${quoteId}&accept_token=eq.${token}&select=*`);
+        if (!data?.[0]) { setStatus("invalid"); return; }
+        setQuote(data[0]);
+        if (data[0].status === "accepted") { setStatus("already"); return; }
+        await sb("PATCH", `/quotes?id=eq.${quoteId}`, { status:"accepted", accepted_at:new Date().toISOString() });
+        // Also create a job in the scheduler
+        await fetch(`${SB_URL}/rest/v1/jobs`, {
+          method:"POST",
+          headers:{"Content-Type":"application/json","apikey":SB_KEY,"Authorization":`Bearer ${SB_KEY}`,"Prefer":"return=representation"},
+          body: JSON.stringify({
+            job_num: data[0].quote_num?.replace("Q-",""),
+            customer: data[0].customer_name,
+            client: data[0].customer_name,
+            product: `${data[0].garment_brand || ""} ${data[0].garment_style || ""}`.trim(),
+            garment_style: `${data[0].garment_brand || ""} ${data[0].garment_style || ""}`.trim(),
+            qty: data[0].quantity,
+            type: (data[0].decoration_types||[]).some(d=>d.toLowerCase().includes("emb")) ? "embroidery" : "screenprint_new",
+            current_step: "approved",
+            urgency: "normal",
+            priority: 99,
+            deposit_paid: false,
+            archived: false,
+            notes: `Quote ${data[0].quote_num} accepted by customer`,
+          }),
+        });
+        setStatus("accepted");
+      } catch(e) { setStatus("error"); }
+    }
+    if (quoteId && token) accept();
+    else setStatus("invalid");
+  }, []);
+
+  const PS = {
+    root:{minHeight:"100vh",background:"#f5f2eb",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif"},
+    box:{background:"#fff",borderRadius:8,padding:"48px 40px",maxWidth:480,width:"100%",textAlign:"center",boxShadow:"0 8px 32px rgba(0,0,0,0.08)"},
+    logo:{fontFamily:"'Bebas Neue',sans-serif",fontSize:"22px",letterSpacing:"4px",marginBottom:28,color:"#0d0d0d"},
+    icon:{fontSize:"48px",marginBottom:16},
+    title:{fontFamily:"'Bebas Neue',sans-serif",fontSize:"28px",letterSpacing:"3px",marginBottom:12},
+    body:{fontSize:"14px",color:"#666",lineHeight:1.7},
+  };
+
+  return (
+    <div style={PS.root}>
+      <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet"/>
+      <div style={PS.box}>
+        <div style={PS.logo}>TRUE <span style={{color:"#c8392b"}}>NORTH</span></div>
+        {status==="loading" && <div style={PS.body}>Processing your acceptance…</div>}
+        {status==="accepted" && <>
+          <div style={PS.icon}>✅</div>
+          <div style={{...PS.title,color:"#2a7a4b"}}>QUOTE ACCEPTED</div>
+          <p style={PS.body}>
+            Thanks{quote?.customer_name ? `, ${quote.customer_name.split(" ")[0]}` : ""}! We've received your acceptance for quote <strong>#{quote?.quote_num}</strong>.<br/><br/>
+            Our team will be in touch shortly to arrange your <strong>80% deposit</strong> and get your order into production.
+          </p>
+          <div style={{marginTop:24,padding:"14px 16px",background:"#f5f2eb",borderRadius:4,fontSize:"13px",color:"#555"}}>
+            Questions? Email us at <a href="mailto:sales@truenorthscreenprinting.ca" style={{color:"#c8392b"}}>sales@truenorthscreenprinting.ca</a> or call <a href="tel:6048744488" style={{color:"#c8392b"}}>604-874-4488</a>
+          </div>
+        </>}
+        {status==="already" && <>
+          <div style={PS.icon}>✓</div>
+          <div style={PS.title}>ALREADY ACCEPTED</div>
+          <p style={PS.body}>This quote has already been accepted. Our team will be in touch shortly.</p>
+        </>}
+        {(status==="invalid"||status==="error") && <>
+          <div style={PS.icon}>⚠️</div>
+          <div style={PS.title}>INVALID LINK</div>
+          <p style={PS.body}>This link is invalid or has expired. Please contact us at <a href="mailto:sales@truenorthscreenprinting.ca" style={{color:"#c8392b"}}>sales@truenorthscreenprinting.ca</a></p>
+        </>}
+      </div>
+    </div>
+  );
+}
+
+// ── Changes Page ──────────────────────────────────────────────────────────────
+function ChangesPage({ quoteId, token }) {
+  const [quote, setQuote] = useState(null);
+  const [status, setStatus] = useState("loading");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const data = await sb("GET", `/quotes?id=eq.${quoteId}&accept_token=eq.${token}&select=*`);
+        if (!data?.[0]) { setStatus("invalid"); return; }
+        setQuote(data[0]);
+        setStatus("ready");
+      } catch(e) { setStatus("error"); }
+    }
+    if (quoteId && token) load();
+    else setStatus("invalid");
+  }, []);
+
+  const submit = async () => {
+    if (!notes.trim()) return;
+    setSubmitting(true);
+    try {
+      await sb("PATCH", `/quotes?id=eq.${quoteId}`, {
+        status: "changes_requested",
+        change_notes: notes,
+        changes_requested_at: new Date().toISOString(),
+      });
+      setSubmitted(true);
+    } catch(e) { alert("Something went wrong. Please email sales@truenorthscreenprinting.ca"); }
+    setSubmitting(false);
+  };
+
+  const PS = {
+    root:{minHeight:"100vh",background:"#f5f2eb",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif",padding:"20px"},
+    box:{background:"#fff",borderRadius:8,padding:"48px 40px",maxWidth:520,width:"100%",boxShadow:"0 8px 32px rgba(0,0,0,0.08)"},
+    logo:{fontFamily:"'Bebas Neue',sans-serif",fontSize:"22px",letterSpacing:"4px",marginBottom:28,color:"#0d0d0d",textAlign:"center"},
+    title:{fontFamily:"'Bebas Neue',sans-serif",fontSize:"24px",letterSpacing:"2px",marginBottom:8,color:"#0d0d0d"},
+    lbl:{fontSize:"11px",letterSpacing:"1.5px",textTransform:"uppercase",color:"#888",display:"block",marginBottom:6,marginTop:16},
+    ta:{width:"100%",border:"1.5px solid #ddd",borderRadius:4,padding:"12px 14px",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",resize:"vertical",minHeight:120,outline:"none",boxSizing:"border-box"},
+    btn:{display:"block",width:"100%",background:"#c8392b",color:"#fff",border:"none",borderRadius:4,padding:"14px",fontSize:"14px",fontWeight:700,letterSpacing:"1px",cursor:"pointer",marginTop:16},
+  };
+
+  return (
+    <div style={PS.root}>
+      <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet"/>
+      <div style={PS.box}>
+        <div style={PS.logo}>TRUE <span style={{color:"#c8392b"}}>NORTH</span></div>
+
+        {status==="loading" && <p style={{textAlign:"center",color:"#888"}}>Loading your quote…</p>}
+
+        {status==="ready" && !submitted && <>
+          <div style={PS.title}>Request Changes</div>
+          <p style={{fontSize:"14px",color:"#666",marginBottom:20,lineHeight:1.6}}>
+            No problem! Let us know what you'd like to change for quote <strong>#{quote?.quote_num}</strong> and we'll get back to you with a revised quote shortly.
+          </p>
+          {quote && (
+            <div style={{background:"#f5f2eb",borderRadius:4,padding:"12px 14px",fontSize:"13px",color:"#555",marginBottom:16,lineHeight:1.7}}>
+              <strong style={{color:"#333"}}>{quote.garment_brand} {quote.garment_style}</strong> — {quote.quantity} units<br/>
+              Total: <strong style={{color:"#c8392b"}}>${(quote.total||0).toFixed(2)} CAD</strong>
+            </div>
+          )}
+          <label style={PS.lbl}>What would you like to change? *</label>
+          <textarea style={PS.ta} value={notes} onChange={e=>setNotes(e.target.value)}
+            placeholder="e.g. Can we reduce the quantity to 48 units? Also can we change the back print to 1 colour instead of 2?"/>
+          <button style={{...PS.btn,opacity:notes.trim()?1:0.5}} onClick={submit} disabled={submitting||!notes.trim()}>
+            {submitting ? "Submitting…" : "Submit Change Request →"}
+          </button>
+          <p style={{fontSize:"12px",color:"#aaa",textAlign:"center",marginTop:12}}>We'll respond within one business day.</p>
+        </>}
+
+        {submitted && <>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:"48px",marginBottom:16}}>✅</div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:"24px",letterSpacing:"2px",color:"#2a7a4b",marginBottom:12}}>REQUEST RECEIVED</div>
+            <p style={{fontSize:"14px",color:"#666",lineHeight:1.7}}>
+              Thanks! We've received your change request and will send you a revised quote within one business day.
+            </p>
+            <div style={{marginTop:20,padding:"12px 14px",background:"#f5f2eb",borderRadius:4,fontSize:"13px",color:"#555"}}>
+              Questions? <a href="mailto:sales@truenorthscreenprinting.ca" style={{color:"#c8392b"}}>sales@truenorthscreenprinting.ca</a> · 604-874-4488
+            </div>
+          </div>
+        </>}
+
+        {(status==="invalid"||status==="error") && (
+          <p style={{textAlign:"center",color:"#c8392b"}}>This link is invalid or has expired. Please contact us at sales@truenorthscreenprinting.ca</p>
+        )}
       </div>
     </div>
   );
