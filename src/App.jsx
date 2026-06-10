@@ -301,6 +301,12 @@ function QuotesView({ quotes, onOpen, onRefresh }) {
               <span style={S.tag(statusColor[q.status]||"#555")}>{(q.status||"draft").toUpperCase().replace("_"," ")}</span>
             </div>
           </div>
+          {q.status==="changes_requested" && q.change_notes && (
+            <div style={{padding:"10px 20px 14px",borderTop:"1px solid #ffffff08"}}>
+              <div style={{fontSize:"10px",letterSpacing:"1px",color:"#ff9f43",textTransform:"uppercase",marginBottom:4}}>Customer's change request:</div>
+              <div style={{fontSize:"13px",color:"#888",lineHeight:1.5}}>{q.change_notes}</div>
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -506,6 +512,18 @@ function QuoteBuilder({ submission, existingQuote, onSaved, onSent, toast }) {
           </button>
         </div>
       </div>
+
+      {/* Changes requested banner */}
+      {existingQuote?.status === "changes_requested" && existingQuote?.change_notes && (
+        <div style={{background:"#ff9f4315",border:"1px solid #ff9f4350",borderLeft:"4px solid #ff9f43",borderRadius:4,padding:"16px 20px",marginBottom:24}}>
+          <div style={{fontSize:"10px",letterSpacing:"2px",color:"#ff9f43",textTransform:"uppercase",fontWeight:700,marginBottom:8}}>
+            ⚠ Customer Requested Changes
+            {existingQuote.changes_requested_at && <span style={{fontWeight:400,marginLeft:8,color:"#666"}}>{new Date(existingQuote.changes_requested_at).toLocaleDateString("en-CA",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}</span>}
+          </div>
+          <div style={{fontSize:"14px",color:"#f0ede8",lineHeight:1.6,whiteSpace:"pre-wrap"}}>{existingQuote.change_notes}</div>
+          <div style={{marginTop:10,fontSize:"11px",color:"#555"}}>Update the quote below and click Send to Customer to resend.</div>
+        </div>
+      )}
 
       {/* Stats bar */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:24}}>
