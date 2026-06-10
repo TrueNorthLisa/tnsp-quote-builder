@@ -3,12 +3,14 @@ exports.handler = async (event) => {
   try {
     const { styleNum } = JSON.parse(event.body);
 
-    // S&S auth: Basic base64(accountNumber:apiKey)
     const credentials = Buffer.from(
       `${process.env.SS_ACCOUNT_NUM}:${process.env.SS_API_KEY}`
     ).toString('base64');
 
-    const res = await fetch(`https://api.ssactivewear.com/v2/products/${styleNum}?part=prices`, {
+    // Try Canadian endpoint
+    const url = `https://api-ca.ssactivewear.com/v2/products/${styleNum}?part=prices`;
+
+    const res = await fetch(url, {
       headers: {
         'Authorization': `Basic ${credentials}`,
         'Content-Type': 'application/json',
@@ -17,7 +19,7 @@ exports.handler = async (event) => {
 
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`S&S API error: ${res.status} — ${text.slice(0,200)}`);
+      throw new Error(`S&S API error: ${res.status} — ${text.slice(0,300)}`);
     }
     const data = await res.json();
     return { statusCode: 200, body: JSON.stringify(data) };

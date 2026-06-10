@@ -16,113 +16,53 @@ const sb = async (method, path, body) => {
 };
 
 // ── Screen Print Price Table ───────────────────────────────────────────────────
-// Per unit per location, by colour count and quantity tier
-// Tiers: 50-100, 101-200, 201-499, 500+
-// Under 50: use 50-100 rate with markup (25-49: ×1.25, <25: ×1.40)
-const SP_TABLE = {
-//  colours: [50-100,  101-200,  201-499,  500+]
-    1:  [9.89,  8.44,  8.37,  6.90],
-    2:  [10.89, 9.29,  7.45,  5.58],
-    3:  [11.89, 10.14, 8.13,  6.09],
-    4:  [12.89, 10.99, 8.81,  6.60],
-    5:  [13.89, 11.84, 9.49,  7.11],
-    6:  [14.89, 12.69, 10.17, 7.62],
-    7:  [15.89, 13.54, 10.85, 8.13],
-    8:  [16.89, 14.39, 11.53, 8.64],
-    9:  [17.89, 15.24, 12.21, 9.15],
-    10: [18.89, 16.09, 12.89, 9.66],
-};
-const SP_EXTRA_PER_COLOUR = 1.00; // per additional colour above 10
-const SP_SETUP_FEE = 25.00;       // per colour, one-time per order
-const SP_SLEEVE_SURCHARGE = 3.00; // per unit for sleeve/hard print locations
-const SP_ART_FEE = 75.00;         // per hour (applied manually)
-const SP_INK_CHANGE_FEE = 25.00;  // per colour (applied manually)
-const SP_PANTONE_FEE = 25.00;     // per colour (applied manually)
+// Per unit per location — setup cost baked in, calibrated to market rates
+// Formula: base + (colours - 1) × perColour
+// Additional locations use perLocation as base instead
 
-// DTF / Vinyl constants (kept for later)
+const SP_RATES = {
+//               <25     25-49   50-100  101-200  201-499  500+
+  base:        [16.50,  14.50,  12.21,   10.80,   9.20,   7.80],
+  perColour:   [ 1.20,   1.05,   0.87,    0.78,   0.68,   0.58],
+  perLocation: [ 3.80,   3.30,   2.71,    2.40,   2.00,   1.70],
+};
+
+const SP_SLEEVE_SURCHARGE = 3.00;
 const DTF_SHEET_COST = 70;
 const DTF_SHEET_W = 22;
 const DTF_SHEET_H = 60;
 const VINYL_COST_PER_SQFT = 2.64;
 
-function getSPRatePerUnit(colours, qty) {
-  const c = Math.min(Math.max(parseInt(colours) || 1, 1), 999);
-  
-  // Get the base rate from the 50-100 tier
-  const baseRate = c <= 10
-    ? SP_TABLE[c][0]
-    : SP_TABLE[10][0] + (c - 10) * SP_EXTRA_PER_COLOUR;
+function getTierIndex(qty) {
+  if (qty < 25)   return 0;
+  if (qty < 50)   return 1;
+  if (qty <= 100) return 2;
+  if (qty <= 200) return 3;
+  if (qty <= 499) return 4;
+  return 5;
+}
 
-  // Apply quantity tier
-  let rate;
-  if (qty >= 500) {
-    rate = c <= 10 ? SP_TABLE[c][3] : SP_TABLE[10][3] + (c - 10) * SP_EXTRA_PER_COLOUR;
-  } else if (qty >= 201) {
-    rate = c <= 10 ? SP_TABLE[c][2] : SP_TABLE[10][2] + (c - 10) * SP_EXTRA_PER_COLOUR;
-  } else if (qty >= 101) {
-    rate = c <= 10 ? SP_TABLE[c][1] : SP_TABLE[10][1] + (c - 10) * SP_EXTRA_PER_COLOUR;
-  } else if (qty >= 50) {
-    rate = baseRate;
-  } else if (qty >= 25) {
-    rate = baseRate * 1.25; // 25-49 units: +25%
-  } else {
-    rate = baseRate * 1.40; // under 25 units: +40%
-  }
-  
-  return rate;
+function getSPRatePerUnit(colours, qty, isFirstLocation = true) {
+  const t = getTierIndex(qty);
+  const c = Math.max(parseInt(colours) || 1, 1);
+  const base = isFirstLocation ? SP_RATES.base[t] : SP_RATES.perLocation[t];
+  return base + (c - 1) * SP_RATES.perColour[t];
 }
 
 function calcScreenPrint({ qty, placements, isRush = false }) {
   let decorationCost = 0;
-  let screenSetupFee = 0;
 
-  placements.forEach(p => {
-    const colours = parseInt(p.colours) || 1;
+  placements.forEach((p, idx) => {
+    const colours = Math.max(parseInt(p.colours) || 1, 1);
     const isSleeve = (p.placement || "").toLowerCase().includes("sleeve")
       || (p.placement || "").toLowerCase().includes("hard print");
-
-    // Per-unit decoration cost for this placement
-    const ratePerUnit = getSPRatePerUnit(colours, qty);
+    const ratePerUnit = getSPRatePerUnit(colours, qty, idx === 0);
     const sleeveSurcharge = isSleeve ? SP_SLEEVE_SURCHARGE : 0;
     decorationCost += (ratePerUnit + sleeveSurcharge) * qty;
-
-    // One-time setup fee per colour for this placement
-    screenSetupFee += colours * SP_SETUP_FEE;
   });
 
-  const rushFee = isRush ? (decorationCost + screenSetupFee) * 0.25 : 0;
-  return { decorationCost, screenSetupFee, rushFee };
-}
-
-function calcDTF({ qty, placements, isRush = false }) {
-  let totalCost = 0;
-  const LABOUR_PER_PLACEMENT = (5/60) * 40;
-  placements.forEach(p => {
-    const sizeKey = (p.dtf_size || "standard").toLowerCase();
-    let imgW = 8, imgH = 8;
-    if (sizeKey.includes("small")) { imgW = 4; imgH = 4; }
-    else if (sizeKey.includes("oversized")) { imgW = 14; imgH = 14; }
-    const perRow = Math.floor(DTF_SHEET_W / imgW);
-    const perCol = Math.floor(DTF_SHEET_H / imgH);
-    const imgsPerSheet = perRow * perCol;
-    const sheetsNeeded = Math.ceil(qty / imgsPerSheet);
-    totalCost += (sheetsNeeded * DTF_SHEET_COST * 1.75) + (LABOUR_PER_PLACEMENT * qty);
-  });
-  const rushFee = isRush ? totalCost * 0.25 : 0;
-  return { decorationCost: totalCost, screenSetupFee: 0, rushFee };
-}
-
-function calcVinyl({ qty, placements, isRush = false }) {
-  let totalCost = 0;
-  const LABOUR_PER_PLACEMENT = (5/60) * 40;
-  placements.forEach(p => {
-    const w = parseFloat(p.width_in) || 4;
-    const h = parseFloat(p.height_in) || 4;
-    const sqft = (w * h) / 144;
-    totalCost += (sqft * VINYL_COST_PER_SQFT * 1.75 + LABOUR_PER_PLACEMENT) * qty;
-  });
-  const rushFee = isRush ? totalCost * 0.25 : 0;
-  return { decorationCost: totalCost, screenSetupFee: 0, rushFee };
+  const rushFee = isRush ? decorationCost * 0.25 : 0;
+  return { decorationCost, screenSetupFee: 0, rushFee };
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
@@ -709,12 +649,13 @@ function QuoteBuilder({ submission, existingQuote, onSaved, onSent, toast }) {
                     {qty > 0 && (
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#555",letterSpacing:"1px"}}>
                         <span>
-                          ${getSPRatePerUnit(p.colours, qty).toFixed(2)}/unit
+                          ${getSPRatePerUnit(p.colours, qty, i===0).toFixed(2)}/unit
+                          {i > 0 ? " (additional location)" : ""}
                           {(p.placement||"").toLowerCase().includes("sleeve") ? " + $3.00 sleeve" : ""}
-                          {" × "}{qty} units
+                          {" × "}{qty}
                         </span>
                         <span style={{color:"#e8c547"}}>
-                          = ${((getSPRatePerUnit(p.colours, qty) + ((p.placement||"").toLowerCase().includes("sleeve") ? 3 : 0)) * qty).toFixed(2)}
+                          = ${((getSPRatePerUnit(p.colours, qty, i===0) + ((p.placement||"").toLowerCase().includes("sleeve") ? 3 : 0)) * qty).toFixed(2)}
                         </span>
                       </div>
                     )}
@@ -723,8 +664,7 @@ function QuoteBuilder({ submission, existingQuote, onSaved, onSent, toast }) {
                 <div style={S.divider}/>
                 {qty > 0 && (
                   <div style={{fontSize:"11px",color:"#555",letterSpacing:"1px",lineHeight:1.8}}>
-                    <div>Decoration: ${calcScreenPrint({qty,placements:spPlacements,isRush:false}).decorationCost.toFixed(2)}</div>
-                    <div>Setup fees: ${calcScreenPrint({qty,placements:spPlacements,isRush:false}).screenSetupFee.toFixed(2)} ({spPlacements.reduce((a,p)=>a+(parseInt(p.colours)||1),0)} colours × $25)</div>
+                    <div>Decoration total: ${calcScreenPrint({qty,placements:spPlacements,isRush:false}).decorationCost.toFixed(2)}</div>
                     {isRush && <div style={{color:"#ff9f43"}}>Rush fee: ${calcScreenPrint({qty,placements:spPlacements,isRush:true}).rushFee.toFixed(2)}</div>}
                   </div>
                 )}
@@ -841,8 +781,7 @@ function QuoteBuilder({ submission, existingQuote, onSaved, onSent, toast }) {
             <div style={S.cardBody}>
               {[
                 ["Blanks", `${qty} × $${blankCost.toFixed(2)}`, blankTotal],
-                ["Decoration Labor", "", decorCost],
-                ...(setupFee > 0 ? [["Screen Setup / Screens", "", setupFee]] : []),
+                ["Decoration", "", decorCost],
                 ...(rushFee > 0 ? [["Rush Fee (25%)", "", rushFee]] : []),
               ].map(([label, detail, val]) => (
                 <div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #ffffff08"}}>
