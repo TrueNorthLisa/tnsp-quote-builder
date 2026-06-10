@@ -15,8 +15,8 @@ exports.handler = async (event) => {
         <td style="padding:10px 16px;border-bottom:1px solid #2a2a2a;color:#e8c547;text-align:right;">$${p.price?.toFixed(2) || '—'}</td>
       </tr>`).join('');
 
-    const acceptUrl = `${process.env.URL || 'https://tnspquotes.netlify.app'}/accept?id=${quote.id}&token=${quote.accept_token}`;
-    const changesUrl = `${process.env.URL || 'https://tnspquotes.netlify.app'}/changes?id=${quote.id}&token=${quote.accept_token}`;
+    const acceptUrl = `${process.env.URL || 'https://tnspquote.netlify.app'}/accept?id=${quote.id}&token=${quote.accept_token}`;
+    const changesUrl = `${process.env.URL || 'https://tnspquote.netlify.app'}/changes?id=${quote.id}&token=${quote.accept_token}`;
 
     const html = `
 <!DOCTYPE html>
