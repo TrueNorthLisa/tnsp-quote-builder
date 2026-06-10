@@ -823,8 +823,10 @@ function AcceptPage({ quoteId, token }) {
   useEffect(() => {
     async function accept() {
       try {
-        const data = await sb("GET", `/quotes?id=eq.${quoteId}&accept_token=eq.${token}&select=*`);
+        const data = await sb("GET", `/quotes?id=eq.${quoteId}&select=*`);
         if (!data?.[0]) { setStatus("invalid"); return; }
+        // Verify token if present in the quote
+        if (data[0].accept_token && data[0].accept_token !== token) { setStatus("invalid"); return; }
         setQuote(data[0]);
         if (data[0].status === "accepted") { setStatus("already"); return; }
         await sb("PATCH", `/quotes?id=eq.${quoteId}`, { status:"accepted", accepted_at:new Date().toISOString() });
@@ -907,8 +909,10 @@ function ChangesPage({ quoteId, token }) {
   useEffect(() => {
     async function load() {
       try {
-        const data = await sb("GET", `/quotes?id=eq.${quoteId}&accept_token=eq.${token}&select=*`);
+        const data = await sb("GET", `/quotes?id=eq.${quoteId}&select=*`);
         if (!data?.[0]) { setStatus("invalid"); return; }
+        // Verify token if present in the quote
+        if (data[0].accept_token && data[0].accept_token !== token) { setStatus("invalid"); return; }
         setQuote(data[0]);
         setStatus("ready");
       } catch(e) { setStatus("error"); }
